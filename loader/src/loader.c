@@ -27,6 +27,7 @@ _Static_assert(sizeof(uintptr_t) == 8 || sizeof(uintptr_t) == 4, "Expect uintptr
 #define STACK_SIZE 4096
 
 #define UART_REG(x) ((volatile uint32_t *)(UART_BASE + (x)))
+#define UART_REG_8(x) ((volatile uint8_t *)(UART_BASE + (x)))
 
 #if defined(BOARD_zcu102)
 #define GICD_BASE 0x00F9010000UL
@@ -130,6 +131,17 @@ static void putc(uint8_t ch)
 {
     while (!(*UART_REG(STAT) & STAT_TDRE)) { }
     *UART_REG(TRANSMIT) = ch;
+}
+#elif defined(BOARD_ls1043a)
+#define UART_BASE 0x21C04c0
+#define THR        0
+#define LSR        1 << 5
+#define LSR_THRE   1 << 5
+
+static void putc(uint8_t ch)
+{
+    while (!(*UART_REG_8(LSR) & LSR_THRE)) { }
+    *UART_REG_8(THR) = ch;
 }
 #elif defined(BOARD_imx8mm_evk)
 #define UART_BASE 0x30890000

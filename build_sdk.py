@@ -77,6 +77,23 @@ class ConfigInfo:
 
 SUPPORTED_BOARDS = (
     BoardInfo(
+        name="ls1043a",
+        arch=KernelArch.AARCH64,
+        gcc_cpu="cortex-a53",
+        loader_link_address=0x80000000,
+        kernel_options={
+            "KernelPlatform": "ls1043a-rdb",
+            "KernelARMPlatform": "ls1043a-rdb",
+            "KernelIsMCS": True,
+            "KernelArmExportPCNTUser": True,
+            "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
+        },
+        examples={
+            "hello": Path("example/ls1043a/hello")
+        }
+    ),
+    BoardInfo(
         name="tqma8xqp1gb",
         arch=KernelArch.AARCH64,
         gcc_cpu="cortex-a35",
