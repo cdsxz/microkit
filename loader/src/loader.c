@@ -133,9 +133,9 @@ static void putc(uint8_t ch)
     *UART_REG(TRANSMIT) = ch;
 }
 #elif defined(BOARD_ls1043a)
-#define UART_BASE 0x21C04c0
+#define UART_BASE 0x21C0500
 #define THR        0
-#define LSR        1 << 5
+#define LSR        0x5
 #define LSR_THRE   1 << 5
 
 static void putc(uint8_t ch)
@@ -259,6 +259,9 @@ static void puts(const char *s)
 {
 #if PRINTING
     while (*s) {
+        if (*s == '\n') {
+            putc('\r');
+        }
         putc(*s);
         s++;
     }
