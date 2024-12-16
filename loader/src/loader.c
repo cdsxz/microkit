@@ -133,17 +133,16 @@ static void putc(uint8_t ch)
     *UART_REG(TRANSMIT) = ch;
 }
 #elif defined(BOARD_ls1043a)
-#define UART_BASE 0x21C04c0
-#define THR        0
-#define LSR        1 << 5
-#define LSR_THRE   1 << 5
+#define UART_BASE (0x21C0500)
+#define THR        0x00
+#define LSR        0x05
+#define LSR_THRE   (1 << 5)
 
 static void putc(uint8_t ch)
 {
-    while (!(*UART_REG_8(LSR) & LSR_THRE)) { }
+    while ((*UART_REG_8(LSR) & LSR_THRE) == 0);
     *UART_REG_8(THR) = ch;
 }
-
 #elif defined(BOARD_imx8mm_evk) || defined(BOARD_imx8mp_evk)
 #define UART_BASE 0x30890000
 #define STAT 0x98
@@ -271,7 +270,13 @@ static void puts(const char *s)
 {
 #if PRINTING
     while (*s) {
-        putc(*s);
+        if (*s == '\n') {
+            putc('\r');
+            putc('\n');
+        }
+        else {
+            putc(*s);
+        }        
         s++;
     }
 #endif
