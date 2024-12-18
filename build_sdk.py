@@ -86,6 +86,7 @@ SUPPORTED_BOARDS = (
             "KernelARMPlatform": "ls1043a-rdb",
             "KernelIsMCS": True,
             "KernelArmExportPCNTUser": True,
+            "KernelArmExportPTMRUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
         },
