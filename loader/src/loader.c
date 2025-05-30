@@ -29,12 +29,12 @@ _Static_assert(sizeof(uintptr_t) == 8 || sizeof(uintptr_t) == 4, "Expect uintptr
 #define UART_REG(x) ((volatile uint32_t *)(UART_BASE + (x)))
 #define UART_REG_8(x) ((volatile uint8_t *)(UART_BASE + (x)))
 
-#if defined(BOARD_zcu102)
+#if defined(BOARD_zcu102) || defined(BOARD_ultra96v2)
 #define GICD_BASE 0x00F9010000UL
 #define GICC_BASE 0x00F9020000UL
 #elif defined(BOARD_qemu_virt_aarch64)
-#define GICD_BASE 0x8010000UL
-#define GICC_BASE 0x8020000UL
+#define GICD_BASE 0x8000000UL
+#define GICC_BASE 0x8010000UL
 #endif
 
 #define REGION_TYPE_DATA 1
@@ -58,6 +58,7 @@ struct region {
 
 struct loader_data {
     uintptr_t magic;
+    uintptr_t size;
     uintptr_t flags;
     uintptr_t kernel_entry;
     uintptr_t ui_p_reg_start;
@@ -81,6 +82,44 @@ typedef void (*sel4_entry)(
     uintptr_t extra_device_addr_p,
     uintptr_t extra_device_size
 );
+
+static void *memcpy(void *dst, const void *src, size_t sz)
+{
+    char *dst_ = dst;
+    const char *src_ = src;
+    while (sz-- > 0) {
+        *dst_++ = *src_++;
+    }
+
+    return dst;
+}
+
+void *memmove(void *restrict dest, const void *restrict src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+
+    /* no copying to do */
+    if (d == s) {
+        return dest;
+    }
+    /* for non-overlapping regions, just use memcpy */
+    else if (s + n <= d || d + n <= s) {
+        return memcpy(dest, src, n);
+    }
+    /* if copying from the start of s to the start of d, just use memcpy */
+    else if (s > d) {
+        return memcpy(dest, src, n);
+    }
+
+    /* copy from end of 's' to end of 'd' */
+    size_t i;
+    for (i = 1; i <= n; i++) {
+        d[n - i] = s[n - i];
+    }
+
+    return dest;
+}
 
 void switch_to_el1(void);
 void switch_to_el2(void);
@@ -112,20 +151,13 @@ extern char _text;
 extern char _bss_end;
 const struct loader_data *loader_data = (void *) &_bss_end;
 
-static void memcpy(void *dst, const void *src, size_t sz)
-{
-    char *dst_ = dst;
-    const char *src_ = src;
-    while (sz-- > 0) {
-        *dst_++ = *src_++;
-    }
-}
-
 #if defined(BOARD_tqma8xqp1gb)
 #define UART_BASE 0x5a070000
 #define STAT 0x14
 #define TRANSMIT 0x1c
 #define STAT_TDRE (1 << 23)
+
+static void uart_init() {}
 
 static void putc(uint8_t ch)
 {
@@ -143,11 +175,13 @@ static void putc(uint8_t ch)
     while (!(*UART_REG_8(LSR) & LSR_THRE)) { }
     *UART_REG_8(THR) = ch;
 }
-#elif defined(BOARD_imx8mm_evk)
+#elif defined(BOARD_imx8mm_evk) || defined(BOARD_imx8mp_evk)
 #define UART_BASE 0x30890000
 #define STAT 0x98
 #define TRANSMIT 0x40
 #define STAT_TDRE (1 << 14)
+
+static void uart_init() {}
 
 static void putc(uint8_t ch)
 {
@@ -183,14 +217,10 @@ static void putc(uint8_t ch)
 #define TRANSMIT 0x40
 #define STAT_TDRE (1 << 14)
 
+static void uart_init() {}
+
 static void putc(uint8_t ch)
 {
-    if (ch == '\n') {
-        // ensure FIFO has space
-        while (!(*UART_REG(STAT) & STAT_TDRE)) { }
-        *UART_REG(TRANSMIT) = '\r';
-    }
-
     // ensure FIFO has space
     while (!(*UART_REG(STAT) & STAT_TDRE)) { }
     *UART_REG(TRANSMIT) = ch;
@@ -200,6 +230,8 @@ static void putc(uint8_t ch)
 #define UART_WFIFO 0x0
 #define UART_STATUS 0xC
 #define UART_TX_FULL (1 << 21)
+
+static void uart_init() {}
 
 static void putc(uint8_t ch)
 {
@@ -212,21 +244,76 @@ static void putc(uint8_t ch)
 #define UART_STATUS 0xC
 #define UART_TX_FULL (1 << 21)
 
+static void uart_init() {}
+
 static void putc(uint8_t ch)
 {
     while ((*UART_REG(UART_STATUS) & UART_TX_FULL));
     *UART_REG(UART_WFIFO) = ch;
 }
-#elif defined(BOARD_qemu_virt_aarch64)
-#define UART_BASE                 0x9000000
-#define UARTDR                    0x000
-#define UARTFR                    0x018
-#define PL011_UARTFR_TXFF         (1 << 5)
+#elif defined(BOARD_ultra96v2)
+/* Use UART1 available through USB-to-JTAG/UART pod */
+#define UART_BASE 0x00ff010000
+#define R_UART_CHANNEL_STS          0x2C
+#define UART_CHANNEL_STS_TXEMPTY    0x08
+#define UART_CHANNEL_STS_TACTIVE    0x800
+#define R_UART_TX_RX_FIFO           0x30
+
+static void uart_init(void) {}
 
 static void putc(uint8_t ch)
 {
-    while ((*UART_REG(UARTFR) & PL011_UARTFR_TXFF) != 0);
-    *UART_REG(UARTDR) = ch;
+    while (!(*UART_REG(R_UART_CHANNEL_STS) & UART_CHANNEL_STS_TXEMPTY)) {};
+    while (*UART_REG(R_UART_CHANNEL_STS) & UART_CHANNEL_STS_TACTIVE) {};
+
+    *((volatile uint32_t *)(UART_BASE + R_UART_TX_RX_FIFO)) = ch;
+}
+#elif defined(BOARD_qemu_virt_aarch64)
+#define UART_BASE                 0x9000000
+#define PL011_TCR                 0x030
+#define PL011_UARTDR              0x000
+#define PL011_UARTFR              0x018
+#define PL011_UARTFR_TXFF         (1 << 5)
+#define PL011_CR_UART_EN          (1 << 0)
+#define PL011_CR_TX_EN            (1 << 8)
+
+static void uart_init()
+{
+    /* Enable the device and transmit */
+    *UART_REG(PL011_TCR) |= (PL011_CR_TX_EN | PL011_CR_UART_EN);
+}
+
+static void putc(uint8_t ch)
+{
+    while ((*UART_REG(PL011_UARTFR) & PL011_UARTFR_TXFF) != 0);
+    *UART_REG(PL011_UARTDR) = ch;
+}
+
+#elif defined(BOARD_rpi4b_1gb)
+#define UART_BASE 0xfe215040
+#define MU_IO 0x00
+#define MU_LSR 0x14
+#define MU_LSR_TXIDLE (1 << 6)
+
+static void uart_init() {}
+
+static void putc(uint8_t ch)
+{
+    while (!(*UART_REG(MU_LSR) & MU_LSR_TXIDLE));
+    *UART_REG(MU_IO) = (ch & 0xff);
+}
+#elif defined(BOARD_rockpro64)
+#define UART_BASE   0xff1a0000
+#define UTHR        0x0
+#define ULSR        0x14
+#define ULSR_THRE   (1 << 5)
+
+static void uart_init() {}
+
+static void putc(uint8_t ch)
+{
+    while ((*UART_REG(ULSR) & ULSR_THRE) == 0);
+    *UART_REG(UTHR) = ch;
 }
 
 #elif defined(ARCH_riscv64)
@@ -246,6 +333,11 @@ static void putc(uint8_t ch)
 })
 
 #define SBI_CALL_1(which, arg0) SBI_CALL(which, arg0, 0, 0)
+
+static void uart_init()
+{
+    /* Nothing to do, OpenSBI will do UART init for us. */
+}
 
 static void putc(uint8_t ch)
 {
@@ -309,7 +401,7 @@ static void puthex(uintptr_t val)
 #endif
 }
 
-/* Returns the current execption level */
+/* Returns the current exception level */
 static enum el current_el(void)
 {
     /* See: C5.2.1 CurrentEL */
@@ -449,7 +541,7 @@ static char *ec_to_string(uintptr_t ec)
  *
  * This doesn't *do anything*. It helps when
  * debugging to verify that the data structures are
- * being interpretted correctly by the loader.
+ * being interpreted correctly by the loader.
  */
 static void print_flags(void)
 {
@@ -575,7 +667,7 @@ static void start_kernel(void)
     );
 }
 
-#if defined(BOARD_zcu102) || defined(BOARD_qemu_virt_aarch64)
+#if defined(BOARD_zcu102) || defined(BOARD_ultra96v2) || defined(BOARD_qemu_virt_aarch64)
 static void configure_gicv2(void)
 {
     /* The ZCU102 start in EL3, and then we drop to EL1(NS).
@@ -613,7 +705,7 @@ static void configure_gicv2(void)
      * must be set appropriately. Only interrupts with priorities less
      * than this mask will interrupt the CPU.
      *
-     * seL4 (effectively) sets intererupts to priority 0x80, so it is
+     * seL4 (effectively) sets interrupts to priority 0x80, so it is
      * important to make sure this is greater than 0x80.
      */
     *((volatile uint32_t *)(GICC_BASE + 0x4)) = 0xf0;
@@ -647,11 +739,26 @@ static inline void enable_mmu(void)
 }
 #endif
 
+void relocation_failed(void)
+{
+    puts("LDR|ERROR: relocation failed, loader destination would overlap current loader location\n");
+    while (1);
+}
+
+void relocation_log(uint64_t reloc_addr, uint64_t curr_addr)
+{
+    /* This function is called from assembly before main so we call uart_init here as well. */
+    uart_init();
+    puts("LDR|INFO: relocating from ");
+    puthex64(curr_addr);
+    puts(" to ");
+    puthex64(reloc_addr);
+    puts("\n");
+}
+
 int main(void)
 {
-#if defined(BOARD_zcu102)
     uart_init();
-#endif
 
     puts("LDR|INFO: altloader for seL4 starting\n");
     /* Check that the loader magic number is set correctly */
@@ -667,7 +774,7 @@ int main(void)
      */
     copy_data();
 
-#if defined(BOARD_zcu102) || defined(BOARD_qemu_virt_aarch64)
+#if defined(BOARD_zcu102) || defined(BOARD_ultra96v2) || defined(BOARD_qemu_virt_aarch64)
     configure_gicv2();
 #endif
 

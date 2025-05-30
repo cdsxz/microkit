@@ -5,6 +5,7 @@
 //
 
 use crate::UntypedObject;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 
@@ -16,6 +17,18 @@ pub struct BootInfo {
     pub page_cap_count: u64,
     pub untyped_objects: Vec<UntypedObject>,
     pub first_available_cap: u64,
+}
+
+#[derive(Deserialize)]
+pub struct PlatformConfigRegion {
+    pub start: u64,
+    pub end: u64,
+}
+
+#[derive(Deserialize)]
+pub struct PlatformConfig {
+    pub devices: Vec<PlatformConfigRegion>,
+    pub memory: Vec<PlatformConfigRegion>,
 }
 
 /// Represents an allocated kernel object.
@@ -50,8 +63,15 @@ pub struct Config {
     pub fpu: bool,
     /// ARM-specific, number of physical address bits
     pub arm_pa_size_bits: Option<usize>,
+    /// ARM-specific, where or not SMC forwarding is allowed
+    /// False if the kernel config option has not been enabled.
+    /// None on any non-ARM architecture.
+    pub arm_smc: Option<bool>,
     /// RISC-V specific, what kind of virtual memory system (e.g Sv39)
     pub riscv_pt_levels: Option<RiscvVirtualMemory>,
+    pub invocations_labels: serde_json::Value,
+    pub device_regions: Vec<PlatformConfigRegion>,
+    pub normal_regions: Vec<PlatformConfigRegion>,
 }
 
 impl Config {
@@ -66,6 +86,66 @@ impl Config {
                 false => 0x800000000000,
             },
             Arch::Riscv64 => 0x0000003ffffff000,
+        }
+    }
+
+    pub fn virtual_base(&self) -> u64 {
+        // These match the PPTR_BASE define in the kernel source.
+        match self.arch {
+            Arch::Aarch64 => match self.hypervisor {
+                true => 0x0000008000000000,
+                false => 0xffffff8000000000,
+            },
+            Arch::Riscv64 => match self.riscv_pt_levels.unwrap() {
+                RiscvVirtualMemory::Sv39 => 0xffffffc000000000,
+            },
+        }
+    }
+
+    pub fn page_sizes(&self) -> [u64; 2] {
+        match self.arch {
+            Arch::Aarch64 | Arch::Riscv64 => [0x1000, 0x200_000],
+        }
+    }
+
+    pub fn pd_stack_top(&self) -> u64 {
+        self.user_top()
+    }
+
+    pub fn pd_stack_bottom(&self, stack_size: u64) -> u64 {
+        self.pd_stack_top() - stack_size
+    }
+
+    /// For simplicity and consistency, the stack of each PD occupies the highest
+    /// possible virtual memory region. That means that the highest possible address
+    /// for a user to be able to create a mapping at is below the stack region.
+    pub fn pd_map_max_vaddr(&self, stack_size: u64) -> u64 {
+        // This function depends on the invariant that the stack of a PD
+        // consumes the highest possible address of the virtual address space.
+        assert!(self.pd_stack_top() == self.user_top());
+
+        self.pd_stack_bottom(stack_size)
+    }
+
+    /// Unlike PDs, virtual machines do not have a stack and so the max virtual
+    /// address of a mapping is whatever seL4 chooses as the maximum virtual address
+    /// in a VSpace.
+    pub fn vm_map_max_vaddr(&self) -> u64 {
+        self.user_top()
+    }
+
+    pub fn paddr_to_kernel_vaddr(&self, paddr: u64) -> u64 {
+        paddr.wrapping_add(self.virtual_base())
+    }
+
+    pub fn kernel_vaddr_to_paddr(&self, vaddr: u64) -> u64 {
+        vaddr.wrapping_sub(self.virtual_base())
+    }
+
+    pub fn aarch64_vspace_s2_start_l1(&self) -> bool {
+        match self.arch {
+            Arch::Aarch64 => self.hypervisor && self.arm_pa_size_bits.unwrap() == 40,
+            _ => panic!("internal error"),
         }
     }
 }
@@ -305,35 +385,35 @@ enum InvocationLabel {
     // Untyped
     UntypedRetype,
     // TCB
-    TcbReadRegisters,
-    TcbWriteRegisters,
-    TcbCopyRegisters,
-    TcbConfigure,
-    TcbSetPriority,
-    TcbSetMCPriority,
-    TcbSetSchedParams,
-    TcbSetTimeoutEndpoint,
-    TcbSetIpcBuffer,
-    TcbSetSpace,
-    TcbSuspend,
-    TcbResume,
-    TcbBindNotification,
-    TcbUnbindNotification,
-    TcbSetTLSBase,
+    TCBReadRegisters,
+    TCBWriteRegisters,
+    TCBCopyRegisters,
+    TCBConfigure,
+    TCBSetPriority,
+    TCBSetMCPriority,
+    TCBSetSchedParams,
+    TCBSetTimeoutEndpoint,
+    TCBSetIPCBuffer,
+    TCBSetSpace,
+    TCBSuspend,
+    TCBResume,
+    TCBBindNotification,
+    TCBUnbindNotification,
+    TCBSetTLSBase,
     // CNode
-    CnodeRevoke,
-    CnodeDelete,
-    CnodeCancelBadgedSends,
-    CnodeCopy,
-    CnodeMint,
-    CnodeMove,
-    CnodeMutate,
-    CnodeRotate,
+    CNodeRevoke,
+    CNodeDelete,
+    CNodeCancelBadgedSends,
+    CNodeCopy,
+    CNodeMint,
+    CNodeMove,
+    CNodeMutate,
+    CNodeRotate,
     // IRQ
-    IrqIssueIrqHandler,
-    IrqAckIrq,
-    IrqSetIrqHandler,
-    IrqClearIrqHandler,
+    IRQIssueIRQHandler,
+    IRQAckIRQ,
+    IRQSetIRQHandler,
+    IRQClearIRQHandler,
     // Domain
     DomainSetSet,
     // Scheduling
@@ -344,133 +424,51 @@ enum InvocationLabel {
     SchedContextConsume,
     SchedContextYieldTo,
     // ARM VSpace
-    ArmVspaceCleanData,
-    ArmVspaceInvalidateData,
-    ArmVspaceCleanInvalidateData,
-    ArmVspaceUnifyInstruction,
+    ARMVSpaceCleanData,
+    ARMVSpaceInvalidateData,
+    ARMVSpaceCleanInvalidateData,
+    ARMVSpaceUnifyInstruction,
     // ARM SMC
-    ArmSmcCall,
+    ARMSMCCall,
     // ARM Page table
-    ArmPageTableMap,
-    ArmPageTableUnmap,
+    ARMPageTableMap,
+    ARMPageTableUnmap,
     // ARM Page
-    ArmPageMap,
-    ArmPageUnmap,
-    ArmPageCleanData,
-    ArmPageInvalidateData,
-    ArmPageCleanInvalidateData,
-    ArmPageUnifyInstruction,
-    ArmPageGetAddress,
+    ARMPageMap,
+    ARMPageUnmap,
+    ARMPageCleanData,
+    ARMPageInvalidateData,
+    ARMPageCleanInvalidateData,
+    ARMPageUnifyInstruction,
+    ARMPageGetAddress,
     // ARM Asid
-    ArmAsidControlMakePool,
-    ArmAsidPoolAssign,
+    ARMASIDControlMakePool,
+    ARMASIDPoolAssign,
     // ARM vCPU
-    ArmVcpuSetTcb,
-    ArmVcpuInjectIrq,
-    ArmVcpuReadReg,
-    ArmVcpuWriteReg,
-    ArmVcpuAckVppi,
+    ARMVCPUSetTCB,
+    ARMVCPUInjectIRQ,
+    ARMVCPUReadReg,
+    ARMVCPUWriteReg,
+    ARMVCPUAckVppi,
     // ARM IRQ
-    ArmIrqIssueIrqHandlerTrigger,
+    ARMIRQIssueIRQHandlerTrigger,
     // RISC-V Page Table
-    RiscvPageTableMap,
-    RiscvPageTableUnmap,
+    RISCVPageTableMap,
+    RISCVPageTableUnmap,
     // RISC-V Page
-    RiscvPageMap,
-    RiscvPageUnmap,
-    RiscvPageGetAddress,
+    RISCVPageMap,
+    RISCVPageUnmap,
+    RISCVPageGetAddress,
     // RISC-V ASID
-    RiscvAsidControlMakePool,
-    RiscvAsidPoolAssign,
+    RISCVASIDControlMakePool,
+    RISCVASIDPoolAssign,
     // RISC-V IRQ
-    RiscvIrqIssueIrqHandlerTrigger,
+    RISCVIRQIssueIRQHandlerTrigger,
 }
 
-impl InvocationLabel {
-    /// Convert an invocation's named label to the value seL4 expects when
-    /// you make the invocation.
-    pub fn to_value(self) -> u32 {
-        match self {
-            InvocationLabel::UntypedRetype => 1,
-            InvocationLabel::TcbReadRegisters => 2,
-            InvocationLabel::TcbWriteRegisters => 3,
-            InvocationLabel::TcbCopyRegisters => 4,
-            InvocationLabel::TcbConfigure => 5,
-            InvocationLabel::TcbSetPriority => 6,
-            InvocationLabel::TcbSetMCPriority => 7,
-            InvocationLabel::TcbSetSchedParams => 8,
-            InvocationLabel::TcbSetTimeoutEndpoint => 9,
-            InvocationLabel::TcbSetIpcBuffer => 10,
-            InvocationLabel::TcbSetSpace => 11,
-            InvocationLabel::TcbSuspend => 12,
-            InvocationLabel::TcbResume => 13,
-            InvocationLabel::TcbBindNotification => 14,
-            InvocationLabel::TcbUnbindNotification => 15,
-            InvocationLabel::TcbSetTLSBase => 16,
-            // CNode
-            InvocationLabel::CnodeRevoke => 17,
-            InvocationLabel::CnodeDelete => 18,
-            InvocationLabel::CnodeCancelBadgedSends => 19,
-            InvocationLabel::CnodeCopy => 20,
-            InvocationLabel::CnodeMint => 21,
-            InvocationLabel::CnodeMove => 22,
-            InvocationLabel::CnodeMutate => 23,
-            InvocationLabel::CnodeRotate => 24,
-            // IRQ
-            InvocationLabel::IrqIssueIrqHandler => 25,
-            InvocationLabel::IrqAckIrq => 26,
-            InvocationLabel::IrqSetIrqHandler => 27,
-            InvocationLabel::IrqClearIrqHandler => 28,
-            // Domain
-            InvocationLabel::DomainSetSet => 29,
-            // Scheduling
-            InvocationLabel::SchedControlConfigureFlags => 30,
-            InvocationLabel::SchedContextBind => 31,
-            InvocationLabel::SchedContextUnbind => 32,
-            InvocationLabel::SchedContextUnbindObject => 33,
-            InvocationLabel::SchedContextConsume => 34,
-            InvocationLabel::SchedContextYieldTo => 35,
-            // ARM VSpace
-            InvocationLabel::ArmVspaceCleanData => 36,
-            InvocationLabel::ArmVspaceInvalidateData => 37,
-            InvocationLabel::ArmVspaceCleanInvalidateData => 38,
-            InvocationLabel::ArmVspaceUnifyInstruction => 39,
-            // ARM SMC
-            InvocationLabel::ArmSmcCall => 40,
-            // ARM Page table
-            InvocationLabel::ArmPageTableMap => 41,
-            InvocationLabel::ArmPageTableUnmap => 42,
-            // ARM Page
-            InvocationLabel::ArmPageMap => 43,
-            InvocationLabel::ArmPageUnmap => 44,
-            InvocationLabel::ArmPageCleanData => 45,
-            InvocationLabel::ArmPageInvalidateData => 46,
-            InvocationLabel::ArmPageCleanInvalidateData => 47,
-            InvocationLabel::ArmPageUnifyInstruction => 48,
-            InvocationLabel::ArmPageGetAddress => 49,
-            // ARM ASID
-            InvocationLabel::ArmAsidControlMakePool => 50,
-            InvocationLabel::ArmAsidPoolAssign => 51,
-            // ARM vCPU
-            InvocationLabel::ArmVcpuSetTcb => 52,
-            InvocationLabel::ArmVcpuInjectIrq => 53,
-            InvocationLabel::ArmVcpuReadReg => 54,
-            InvocationLabel::ArmVcpuWriteReg => 55,
-            InvocationLabel::ArmVcpuAckVppi => 56,
-            // ARM IRQ
-            InvocationLabel::ArmIrqIssueIrqHandlerTrigger => 57,
-            // RISC-V Page
-            InvocationLabel::RiscvPageTableMap => 36,
-            InvocationLabel::RiscvPageTableUnmap => 37,
-            InvocationLabel::RiscvPageMap => 38,
-            InvocationLabel::RiscvPageUnmap => 39,
-            InvocationLabel::RiscvPageGetAddress => 40,
-            // RISC-V ASID
-            InvocationLabel::RiscvAsidControlMakePool => 41,
-            InvocationLabel::RiscvAsidPoolAssign => 42,
-            // RISC-V IRQ
-            InvocationLabel::RiscvIrqIssueIrqHandlerTrigger => 43,
-        }
+impl std::fmt::Display for InvocationLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 
@@ -707,7 +705,13 @@ impl Invocation {
         let label = args.to_label(config);
         Invocation {
             label,
-            label_raw: label.to_value(),
+            label_raw: config.invocations_labels[label.to_string()]
+                .as_number()
+                .expect("Invocation is not a number")
+                .as_u64()
+                .expect("Invocation is not u64")
+                .try_into()
+                .expect("Invocation is not u32"),
             args,
             repeat: None,
         }
@@ -773,7 +777,7 @@ impl Invocation {
         assert!(extra_caps < 8);
         assert!(length < 0x80);
 
-        label << 12 | caps << 9 | extra_caps << 7 | length
+        (label << 12) | (caps << 9) | (extra_caps << 7) | length
     }
 
     fn fmt_field(field_name: &'static str, value: u64) -> String {
@@ -848,7 +852,7 @@ impl Invocation {
                 arg_strs.push(Invocation::fmt_field("node_depth", node_depth));
                 arg_strs.push(Invocation::fmt_field("node_offset", node_offset));
                 arg_strs.push(Invocation::fmt_field("num_objects", num_objects));
-                (untyped, cap_lookup.get(&untyped).unwrap())
+                (untyped, &cap_lookup[&untyped])
             }
             InvocationArgs::TcbSetSchedParams {
                 tcb,
@@ -871,7 +875,7 @@ impl Invocation {
                     cap_lookup,
                 ));
                 arg_strs.push(Invocation::fmt_field_cap("fault_ep", fault_ep, cap_lookup));
-                (tcb, cap_lookup.get(&tcb).unwrap())
+                (tcb, &cap_lookup[&tcb])
             }
             InvocationArgs::TcbSetSpace {
                 tcb,
@@ -894,7 +898,7 @@ impl Invocation {
                     cap_lookup,
                 ));
                 arg_strs.push(Invocation::fmt_field("vspace_root_data", vspace_root_data));
-                (tcb, cap_lookup.get(&tcb).unwrap())
+                (tcb, &cap_lookup[&tcb])
             }
             InvocationArgs::TcbSetIpcBuffer {
                 tcb,
@@ -907,9 +911,9 @@ impl Invocation {
                     buffer_frame,
                     cap_lookup,
                 ));
-                (tcb, cap_lookup.get(&tcb).unwrap())
+                (tcb, &cap_lookup[&tcb])
             }
-            InvocationArgs::TcbResume { tcb } => (tcb, cap_lookup.get(&tcb).unwrap()),
+            InvocationArgs::TcbResume { tcb } => (tcb, &cap_lookup[&tcb]),
             InvocationArgs::TcbWriteRegisters {
                 tcb,
                 resume,
@@ -929,7 +933,7 @@ impl Invocation {
                     arg_strs.push(format!("                              {}", s));
                 }
 
-                (tcb, cap_lookup.get(&tcb).unwrap())
+                (tcb, &cap_lookup[&tcb])
             }
             InvocationArgs::TcbBindNotification { tcb, notification } => {
                 arg_strs.push(Invocation::fmt_field_cap(
@@ -937,11 +941,11 @@ impl Invocation {
                     notification,
                     cap_lookup,
                 ));
-                (tcb, cap_lookup.get(&tcb).unwrap())
+                (tcb, &cap_lookup[&tcb])
             }
             InvocationArgs::AsidPoolAssign { asid_pool, vspace } => {
                 arg_strs.push(Invocation::fmt_field_cap("vspace", vspace, cap_lookup));
-                (asid_pool, cap_lookup.get(&asid_pool).unwrap())
+                (asid_pool, &cap_lookup[&asid_pool])
             }
             InvocationArgs::IrqControlGetTrigger {
                 irq_control,
@@ -960,7 +964,7 @@ impl Invocation {
                 ));
                 arg_strs.push(Invocation::fmt_field("dest_index", dest_index));
                 arg_strs.push(Invocation::fmt_field("dest_depth", dest_depth));
-                (irq_control, cap_lookup.get(&irq_control).unwrap())
+                (irq_control, &cap_lookup[&irq_control])
             }
             InvocationArgs::IrqHandlerSetNotification {
                 irq_handler,
@@ -971,7 +975,7 @@ impl Invocation {
                     notification,
                     cap_lookup,
                 ));
-                (irq_handler, cap_lookup.get(&irq_handler).unwrap())
+                (irq_handler, &cap_lookup[&irq_handler])
             }
             InvocationArgs::PageTableMap {
                 page_table,
@@ -982,7 +986,7 @@ impl Invocation {
                 arg_strs.push(Invocation::fmt_field_cap("vspace", vspace, cap_lookup));
                 arg_strs.push(Invocation::fmt_field_hex("vaddr", vaddr));
                 arg_strs.push(Invocation::fmt_field("attr", attr));
-                (page_table, cap_lookup.get(&page_table).unwrap())
+                (page_table, &cap_lookup[&page_table])
             }
             InvocationArgs::PageMap {
                 page,
@@ -995,7 +999,7 @@ impl Invocation {
                 arg_strs.push(Invocation::fmt_field_hex("vaddr", vaddr));
                 arg_strs.push(Invocation::fmt_field("rights", rights));
                 arg_strs.push(Invocation::fmt_field("attr", attr));
-                (page, cap_lookup.get(&page).unwrap())
+                (page, &cap_lookup[&page])
             }
             InvocationArgs::CnodeCopy {
                 cnode,
@@ -1012,7 +1016,7 @@ impl Invocation {
                 arg_strs.push(Invocation::fmt_field_cap("src_obj", src_obj, cap_lookup));
                 arg_strs.push(Invocation::fmt_field("src_depth", src_depth));
                 arg_strs.push(Invocation::fmt_field("rights", rights));
-                (cnode, cap_lookup.get(&cnode).unwrap())
+                (cnode, &cap_lookup[&cnode])
             }
             InvocationArgs::CnodeMint {
                 cnode,
@@ -1031,7 +1035,7 @@ impl Invocation {
                 arg_strs.push(Invocation::fmt_field("src_depth", src_depth));
                 arg_strs.push(Invocation::fmt_field("rights", rights));
                 arg_strs.push(Invocation::fmt_field("badge", badge));
-                (cnode, cap_lookup.get(&cnode).unwrap())
+                (cnode, &cap_lookup[&cnode])
             }
             InvocationArgs::SchedControlConfigureFlags {
                 sched_control,
@@ -1056,7 +1060,7 @@ impl Invocation {
             }
             InvocationArgs::ArmVcpuSetTcb { vcpu, tcb } => {
                 arg_strs.push(Invocation::fmt_field_cap("tcb", tcb, cap_lookup));
-                (vcpu, cap_lookup.get(&vcpu).unwrap())
+                (vcpu, &cap_lookup[&vcpu])
             }
         };
         _ = writeln!(
@@ -1076,23 +1080,23 @@ impl Invocation {
     fn object_type(&self) -> &'static str {
         match self.label {
             InvocationLabel::UntypedRetype => "Untyped",
-            InvocationLabel::TcbSetSchedParams
-            | InvocationLabel::TcbSetSpace
-            | InvocationLabel::TcbSetIpcBuffer
-            | InvocationLabel::TcbResume
-            | InvocationLabel::TcbWriteRegisters
-            | InvocationLabel::TcbBindNotification => "TCB",
-            InvocationLabel::ArmAsidPoolAssign | InvocationLabel::RiscvAsidPoolAssign => {
+            InvocationLabel::TCBSetSchedParams
+            | InvocationLabel::TCBSetSpace
+            | InvocationLabel::TCBSetIPCBuffer
+            | InvocationLabel::TCBResume
+            | InvocationLabel::TCBWriteRegisters
+            | InvocationLabel::TCBBindNotification => "TCB",
+            InvocationLabel::ARMASIDPoolAssign | InvocationLabel::RISCVASIDPoolAssign => {
                 "ASID Pool"
             }
-            InvocationLabel::ArmIrqIssueIrqHandlerTrigger
-            | InvocationLabel::RiscvIrqIssueIrqHandlerTrigger => "IRQ Control",
-            InvocationLabel::IrqSetIrqHandler => "IRQ Handler",
-            InvocationLabel::ArmPageTableMap | InvocationLabel::RiscvPageTableMap => "Page Table",
-            InvocationLabel::ArmPageMap | InvocationLabel::RiscvPageMap => "Page",
-            InvocationLabel::CnodeCopy | InvocationLabel::CnodeMint => "CNode",
+            InvocationLabel::ARMIRQIssueIRQHandlerTrigger
+            | InvocationLabel::RISCVIRQIssueIRQHandlerTrigger => "IRQ Control",
+            InvocationLabel::IRQSetIRQHandler => "IRQ Handler",
+            InvocationLabel::ARMPageTableMap | InvocationLabel::RISCVPageTableMap => "Page Table",
+            InvocationLabel::ARMPageMap | InvocationLabel::RISCVPageMap => "Page",
+            InvocationLabel::CNodeCopy | InvocationLabel::CNodeMint => "CNode",
             InvocationLabel::SchedControlConfigureFlags => "SchedControl",
-            InvocationLabel::ArmVcpuSetTcb => "VCPU",
+            InvocationLabel::ARMVCPUSetTCB => "VCPU",
             _ => panic!(
                 "Internal error: unexpected label when getting object type '{:?}'",
                 self.label
@@ -1103,24 +1107,24 @@ impl Invocation {
     fn method_name(&self) -> &'static str {
         match self.label {
             InvocationLabel::UntypedRetype => "Retype",
-            InvocationLabel::TcbSetSchedParams => "SetSchedParams",
-            InvocationLabel::TcbSetSpace => "SetSpace",
-            InvocationLabel::TcbSetIpcBuffer => "SetIPCBuffer",
-            InvocationLabel::TcbResume => "Resume",
-            InvocationLabel::TcbWriteRegisters => "WriteRegisters",
-            InvocationLabel::TcbBindNotification => "BindNotification",
-            InvocationLabel::ArmAsidPoolAssign | InvocationLabel::RiscvAsidPoolAssign => "Assign",
-            InvocationLabel::ArmIrqIssueIrqHandlerTrigger
-            | InvocationLabel::RiscvIrqIssueIrqHandlerTrigger => "Get",
-            InvocationLabel::IrqSetIrqHandler => "SetNotification",
-            InvocationLabel::ArmPageTableMap
-            | InvocationLabel::ArmPageMap
-            | InvocationLabel::RiscvPageTableMap
-            | InvocationLabel::RiscvPageMap => "Map",
-            InvocationLabel::CnodeCopy => "Copy",
-            InvocationLabel::CnodeMint => "Mint",
+            InvocationLabel::TCBSetSchedParams => "SetSchedParams",
+            InvocationLabel::TCBSetSpace => "SetSpace",
+            InvocationLabel::TCBSetIPCBuffer => "SetIPCBuffer",
+            InvocationLabel::TCBResume => "Resume",
+            InvocationLabel::TCBWriteRegisters => "WriteRegisters",
+            InvocationLabel::TCBBindNotification => "BindNotification",
+            InvocationLabel::ARMASIDPoolAssign | InvocationLabel::RISCVASIDPoolAssign => "Assign",
+            InvocationLabel::ARMIRQIssueIRQHandlerTrigger
+            | InvocationLabel::RISCVIRQIssueIRQHandlerTrigger => "Get",
+            InvocationLabel::IRQSetIRQHandler => "SetNotification",
+            InvocationLabel::ARMPageTableMap
+            | InvocationLabel::ARMPageMap
+            | InvocationLabel::RISCVPageTableMap
+            | InvocationLabel::RISCVPageMap => "Map",
+            InvocationLabel::CNodeCopy => "Copy",
+            InvocationLabel::CNodeMint => "Mint",
             InvocationLabel::SchedControlConfigureFlags => "ConfigureFlags",
-            InvocationLabel::ArmVcpuSetTcb => "VCPUSetTcb",
+            InvocationLabel::ARMVCPUSetTCB => "VCPUSetTcb",
             _ => panic!(
                 "Internal error: unexpected label when getting method name '{:?}'",
                 self.label
@@ -1133,35 +1137,35 @@ impl InvocationArgs {
     fn to_label(&self, config: &Config) -> InvocationLabel {
         match self {
             InvocationArgs::UntypedRetype { .. } => InvocationLabel::UntypedRetype,
-            InvocationArgs::TcbSetSchedParams { .. } => InvocationLabel::TcbSetSchedParams,
-            InvocationArgs::TcbSetSpace { .. } => InvocationLabel::TcbSetSpace,
-            InvocationArgs::TcbSetIpcBuffer { .. } => InvocationLabel::TcbSetIpcBuffer,
-            InvocationArgs::TcbResume { .. } => InvocationLabel::TcbResume,
-            InvocationArgs::TcbWriteRegisters { .. } => InvocationLabel::TcbWriteRegisters,
-            InvocationArgs::TcbBindNotification { .. } => InvocationLabel::TcbBindNotification,
+            InvocationArgs::TcbSetSchedParams { .. } => InvocationLabel::TCBSetSchedParams,
+            InvocationArgs::TcbSetSpace { .. } => InvocationLabel::TCBSetSpace,
+            InvocationArgs::TcbSetIpcBuffer { .. } => InvocationLabel::TCBSetIPCBuffer,
+            InvocationArgs::TcbResume { .. } => InvocationLabel::TCBResume,
+            InvocationArgs::TcbWriteRegisters { .. } => InvocationLabel::TCBWriteRegisters,
+            InvocationArgs::TcbBindNotification { .. } => InvocationLabel::TCBBindNotification,
             InvocationArgs::AsidPoolAssign { .. } => match config.arch {
-                Arch::Aarch64 => InvocationLabel::ArmAsidPoolAssign,
-                Arch::Riscv64 => InvocationLabel::RiscvAsidPoolAssign,
+                Arch::Aarch64 => InvocationLabel::ARMASIDPoolAssign,
+                Arch::Riscv64 => InvocationLabel::RISCVASIDPoolAssign,
             },
             InvocationArgs::IrqControlGetTrigger { .. } => match config.arch {
-                Arch::Aarch64 => InvocationLabel::ArmIrqIssueIrqHandlerTrigger,
-                Arch::Riscv64 => InvocationLabel::RiscvIrqIssueIrqHandlerTrigger,
+                Arch::Aarch64 => InvocationLabel::ARMIRQIssueIRQHandlerTrigger,
+                Arch::Riscv64 => InvocationLabel::RISCVIRQIssueIRQHandlerTrigger,
             },
-            InvocationArgs::IrqHandlerSetNotification { .. } => InvocationLabel::IrqSetIrqHandler,
+            InvocationArgs::IrqHandlerSetNotification { .. } => InvocationLabel::IRQSetIRQHandler,
             InvocationArgs::PageTableMap { .. } => match config.arch {
-                Arch::Aarch64 => InvocationLabel::ArmPageTableMap,
-                Arch::Riscv64 => InvocationLabel::RiscvPageTableMap,
+                Arch::Aarch64 => InvocationLabel::ARMPageTableMap,
+                Arch::Riscv64 => InvocationLabel::RISCVPageTableMap,
             },
             InvocationArgs::PageMap { .. } => match config.arch {
-                Arch::Aarch64 => InvocationLabel::ArmPageMap,
-                Arch::Riscv64 => InvocationLabel::RiscvPageMap,
+                Arch::Aarch64 => InvocationLabel::ARMPageMap,
+                Arch::Riscv64 => InvocationLabel::RISCVPageMap,
             },
-            InvocationArgs::CnodeCopy { .. } => InvocationLabel::CnodeCopy,
-            InvocationArgs::CnodeMint { .. } => InvocationLabel::CnodeMint,
+            InvocationArgs::CnodeCopy { .. } => InvocationLabel::CNodeCopy,
+            InvocationArgs::CnodeMint { .. } => InvocationLabel::CNodeMint,
             InvocationArgs::SchedControlConfigureFlags { .. } => {
                 InvocationLabel::SchedControlConfigureFlags
             }
-            InvocationArgs::ArmVcpuSetTcb { .. } => InvocationLabel::ArmVcpuSetTcb,
+            InvocationArgs::ArmVcpuSetTcb { .. } => InvocationLabel::ARMVCPUSetTCB,
         }
     }
 

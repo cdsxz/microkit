@@ -26,14 +26,13 @@ import json
 from typing import Any, Dict, Union, List, Tuple, Optional
 
 NAME = "microkit"
-VERSION = "1.4.1"
 
 ENV_BIN_DIR = Path(executable).parent
 
 MICROKIT_EPOCH = 1616367257
 
-TOOLCHAIN_AARCH64 = "aarch64-none-elf-"
-TOOLCHAIN_RISCV = "riscv64-unknown-elf-"
+TOOLCHAIN_AARCH64 = "aarch64-none-elf"
+TOOLCHAIN_RISCV = "riscv64-unknown-elf"
 
 KERNEL_CONFIG_TYPE = Union[bool, str]
 KERNEL_OPTIONS = Dict[str, Union[bool, str]]
@@ -42,6 +41,14 @@ KERNEL_OPTIONS = Dict[str, Union[bool, str]]
 class KernelArch(IntEnum):
     AARCH64 = 1
     RISCV64 = 2
+
+    def c_toolchain(self) -> str:
+        if self == KernelArch.AARCH64:
+            return TOOLCHAIN_AARCH64
+        elif self == KernelArch.RISCV64:
+            return TOOLCHAIN_RISCV
+        else:
+            raise Exception(f"Unsupported toolchain architecture '{self}'")
 
     def is_riscv(self) -> bool:
         return self == KernelArch.RISCV64
@@ -57,6 +64,9 @@ class KernelArch(IntEnum):
         else:
             raise Exception(f"Unsupported arch {self}")
 
+    def as_kernel_arch_config(self) -> tuple[str, str]:
+        return ("KernelSel4Arch", self.to_str())
+
 
 @dataclass
 class BoardInfo:
@@ -65,7 +75,6 @@ class BoardInfo:
     gcc_cpu: Optional[str]
     loader_link_address: int
     kernel_options: KERNEL_OPTIONS
-    examples: Dict[str, Path]
 
 
 @dataclass
@@ -105,10 +114,8 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "ethernet": Path("example/tqma8xqp1gb/ethernet")
-        }
     ),
     BoardInfo(
         name="zcu102",
@@ -122,10 +129,8 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "hello": Path("example/zcu102/hello")
-        }
     ),
     BoardInfo(
         name="maaxboard",
@@ -138,10 +143,8 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "hello": Path("example/maaxboard/hello")
-        }
     ),
     BoardInfo(
         name="imx8mm_evk",
@@ -154,10 +157,22 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "passive_server": Path("example/imx8mm_evk/passive_server")
-        }
+    ),
+    BoardInfo(
+        name="imx8mp_evk",
+        arch=KernelArch.AARCH64,
+        gcc_cpu="cortex-a53",
+        loader_link_address=0x41000000,
+        kernel_options={
+            "KernelPlatform": "imx8mp-evk",
+            "KernelIsMCS": True,
+            "KernelArmExportPCNTUser": True,
+            "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
+        },
     ),
     BoardInfo(
         name="imx8mq_evk",
@@ -170,10 +185,8 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "hello": Path("example/imx8mq_evk/hello")
-        }
     ),
     BoardInfo(
         name="odroidc2",
@@ -186,10 +199,8 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "hello": Path("example/odroidc2/hello")
-        }
     ),
     BoardInfo(
         name="odroidc4",
@@ -202,10 +213,23 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "timer": Path("example/odroidc4/timer")
-        }
+    ),
+    BoardInfo(
+        name="ultra96v2",
+        arch=KernelArch.AARCH64,
+        gcc_cpu="cortex-a53",
+        loader_link_address=0x40000000,
+        kernel_options={
+            "KernelPlatform": "zynqmp",
+            "KernelARMPlatform": "ultra96v2",
+            "KernelIsMCS": True,
+            "KernelArmExportPCNTUser": True,
+            "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
+        },
     ),
     BoardInfo(
         name="qemu_virt_aarch64",
@@ -221,17 +245,14 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPCNTUser": True,
             "KernelArmExportPTMRUser": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
-        examples={
-            "hello": Path("example/qemu_virt_aarch64/hello"),
-            "hierarchy": Path("example/qemu_virt_aarch64/hierarchy")
-        }
     ),
     BoardInfo(
         name="qemu_virt_riscv64",
         arch=KernelArch.RISCV64,
         gcc_cpu=None,
-        loader_link_address=0x80200000,
+        loader_link_address=0x90000000,
         kernel_options={
             "KernelPlatform": "qemu-riscv-virt",
             "KernelIsMCS": True,
@@ -239,9 +260,35 @@ SUPPORTED_BOARDS = (
             "KernelRiscvExtD": True,
             "KernelRiscvExtF": True,
         },
-        examples={
-            "hello": Path("example/qemu_virt_riscv64/hello"),
-        }
+    ),
+    BoardInfo(
+        name="rpi4b_1gb",
+        arch=KernelArch.AARCH64,
+        gcc_cpu="cortex-a72",
+        loader_link_address=0x10000000,
+        kernel_options={
+            "KernelPlatform": "bcm2711",
+            "KernelIsMCS": True,
+            "KernelArmExportPCNTUser": True,
+            "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
+            "RPI4_MEMORY": 1024,
+            "KernelAllowSMCCalls": True,
+        },
+    ),
+    BoardInfo(
+        name="rockpro64",
+        arch=KernelArch.AARCH64,
+        gcc_cpu="cortex-a53",
+        loader_link_address=0x30000000,
+        kernel_options={
+            "KernelPlatform": "rockpro64",
+            "KernelIsMCS": True,
+            "KernelArmExportPCNTUser": True,
+            "KernelArmHypervisorSupport": True,
+            "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
+        },
     ),
     BoardInfo(
         name="star64",
@@ -254,9 +301,30 @@ SUPPORTED_BOARDS = (
             "KernelRiscvExtD": True,
             "KernelRiscvExtF": True,
         },
-        examples={
-            "hello": Path("example/star64/hello")
-        }
+    ),
+    BoardInfo(
+        name="ariane",
+        arch=KernelArch.RISCV64,
+        gcc_cpu=None,
+        loader_link_address=0x90000000,
+        kernel_options={
+            "KernelIsMCS": True,
+            "KernelPlatform": "ariane",
+            "KernelRiscvExtD": True,
+            "KernelRiscvExtF": True,
+        },
+    ),
+    BoardInfo(
+        name="cheshire",
+        arch=KernelArch.RISCV64,
+        gcc_cpu=None,
+        loader_link_address=0x90000000,
+        kernel_options={
+            "KernelIsMCS": True,
+            "KernelPlatform": "cheshire",
+            "KernelRiscvExtD": True,
+            "KernelRiscvExtF": True,
+        },
     ),
 )
 
@@ -288,13 +356,13 @@ SUPPORTED_CONFIGS = (
 )
 
 
-def c_toolchain(arch: KernelArch) -> str:
-    if arch == KernelArch.AARCH64:
-        return TOOLCHAIN_AARCH64
-    elif arch == KernelArch.RISCV64:
-        return TOOLCHAIN_RISCV
-    else:
-        raise Exception("Unsupported toolchain architecture '{arch}'")
+EXAMPLES = {
+    "hello": Path("example/hello"),
+    "ethernet": Path("example/ethernet"),
+    "passive_server": Path("example/passive_server"),
+    "hierarchy": Path("example/hierarchy"),
+    "timer": Path("example/timer"),
+}
 
 
 def tar_filter(tarinfo: TarInfo) -> TarInfo:
@@ -324,7 +392,13 @@ def tar_filter(tarinfo: TarInfo) -> TarInfo:
 def get_tool_target_triple() -> str:
     host_system = host_platform.system()
     if host_system == "Linux":
-        return "x86_64-unknown-linux-musl"
+        host_arch = host_platform.machine()
+        if host_arch == "x86_64":
+            return "x86_64-unknown-linux-musl"
+        elif host_arch == "aarch64":
+            return "aarch64-unknown-linux-musl"
+        else:
+            raise Exception(f"Unexpected Linux architecture: {host_arch}")
     elif host_system == "Darwin":
         host_arch = host_platform.machine()
         if host_arch == "x86_64":
@@ -352,9 +426,6 @@ def build_tool(tool_target: Path, target_triple: str) -> None:
 
     tool_output = f"./tool/microkit/target/{target_triple}/release/microkit"
 
-    r = system(f"strip {tool_output}")
-    assert r == 0
-
     copy(tool_output, tool_target)
 
     tool_target.chmod(0o755)
@@ -379,7 +450,11 @@ def build_sel4(
 
     print(f"Building sel4: {sel4_dir=} {root_dir=} {build_dir=} {board=} {config=}")
 
-    config_args = list(board.kernel_options.items()) + list(config.kernel_options.items())
+    config_args = [
+        *board.kernel_options.items(),
+        *config.kernel_options.items(),
+        board.arch.as_kernel_arch_config(),
+    ]
     config_strs = []
     for arg, val in sorted(config_args):
         if isinstance(val, bool):
@@ -390,7 +465,7 @@ def build_sel4(
         config_strs.append(s)
     config_str = " ".join(config_strs)
 
-    toolchain = c_toolchain(board.arch)
+    toolchain = f"{board.arch.c_toolchain()}-"
     cmd = (
         f"cmake -GNinja -DCMAKE_INSTALL_PREFIX={sel4_install_dir.absolute()} "
         f" -DPYTHON3={executable} "
@@ -421,6 +496,12 @@ def build_sel4(
     # Make output read-only
     dest.chmod(0o744)
 
+    invocations_all = sel4_build_dir / "generated" / "invocations_all.json"
+    dest = (root_dir / "board" / board.name / config.name / "invocations_all.json")
+    dest.unlink(missing_ok=True)
+    copy(invocations_all, dest)
+    dest.chmod(0o744)
+
     include_dir = root_dir / "board" / board.name / config.name / "include"
     for source in ("kernel_Config", "libsel4", "libsel4/sel4_Config", "libsel4/autoconf"):
         source_dir = sel4_install_dir / source / "include"
@@ -433,6 +514,12 @@ def build_sel4(
             dest.unlink(missing_ok=True)
             copy(p, dest)
             dest.chmod(0o744)
+
+    platform_gen = sel4_build_dir / "gen_headers" / "plat" / "machine" / "platform_gen.json"
+    dest = root_dir / "board" / board.name / config.name / "platform_gen.json"
+    dest.unlink(missing_ok=True)
+    copy(platform_gen, dest)
+    dest.chmod(0o744)
 
     gen_config_path = sel4_install_dir / "libsel4/include/kernel/gen_config.json"
     with open(gen_config_path, "r") as f:
@@ -455,7 +542,7 @@ def build_elf_component(
     sel4_dir = root_dir / "board" / board.name / config.name
     build_dir = build_dir / board.name / config.name / component_name
     build_dir.mkdir(exist_ok=True, parents=True)
-    toolchain = c_toolchain(board.arch)
+    toolchain = f"{board.arch.c_toolchain()}-"
     defines_str = " ".join(f"{k}={v}" for k, v in defines)
     defines_str += f" ARCH={board.arch.to_str()} BOARD={board.name} BUILD_DIR={build_dir.absolute()} SEL4_SDK={sel4_dir.absolute()} TOOLCHAIN={toolchain}"
 
@@ -482,8 +569,8 @@ def build_elf_component(
 def build_doc(root_dir: Path):
     output = root_dir / "doc" / "microkit_user_manual.pdf"
 
-    environ["TEXINPUTS"] = "docs/style:"
-    r = system(f'pandoc docs/manual.md -o {output}')
+    environ["TEXINPUTS"] = "style:"
+    r = system(f'cd docs && pandoc manual.md -o ../{output}')
     assert r == 0
 
 
@@ -496,13 +583,13 @@ def build_lib_component(
 ) -> None:
     """Build a specific library component.
 
-    Right now this is just libsel4.a
+    Right now this is just libmicrokit.a
     """
     sel4_dir = root_dir / "board" / board.name / config.name
     build_dir = build_dir / board.name / config.name / component_name
     build_dir.mkdir(exist_ok=True, parents=True)
 
-    toolchain = c_toolchain(board.arch)
+    toolchain = f"{board.arch.c_toolchain()}-"
     defines_str = f" ARCH={board.arch.to_str()} BUILD_DIR={build_dir.absolute()} SEL4_SDK={sel4_dir.absolute()} TOOLCHAIN={toolchain}"
 
     if board.gcc_cpu is not None:
@@ -553,8 +640,23 @@ def main() -> None:
     parser.add_argument("--skip-sel4", action="store_true", help="seL4 will not be built")
     parser.add_argument("--skip-docs", action="store_true", help="Docs will not be built")
     parser.add_argument("--skip-tar", action="store_true", help="SDK and source tarballs will not be built")
+    # Read from the version file as unless someone has specified
+    # a version, that is the source of truth
+    with open("VERSION", "r") as f:
+        default_version = f.read().strip()
+    parser.add_argument("--version", default=default_version, help="SDK version")
+    for arch in KernelArch:
+        arch_str = arch.name.lower()
+        parser.add_argument(f"--toolchain-prefix-{arch_str}", default=arch.c_toolchain(), help=f"C toolchain prefix when compiling for {arch_str}, e.g {arch_str}-none-elf")
 
     args = parser.parse_args()
+
+    global TOOLCHAIN_AARCH64
+    global TOOLCHAIN_RISCV
+    TOOLCHAIN_AARCH64 = args.toolchain_prefix_aarch64
+    TOOLCHAIN_RISCV = args.toolchain_prefix_riscv64
+
+    version = args.version
 
     if args.boards is not None:
         supported_board_names = frozenset(board.name for board in SUPPORTED_BOARDS)
@@ -580,9 +682,9 @@ def main() -> None:
     if not sel4_dir.exists():
         raise Exception(f"sel4_dir: {sel4_dir} does not exist")
 
-    root_dir = Path("release") / f"{NAME}-sdk-{VERSION}"
-    tar_file = Path("release") / f"{NAME}-sdk-{VERSION}.tar.gz"
-    source_tar_file = Path("release") / f"{NAME}-source-{VERSION}.tar.gz"
+    root_dir = Path("release") / f"{NAME}-sdk-{version}"
+    tar_file = Path("release") / f"{NAME}-sdk-{version}.tar.gz"
+    source_tar_file = Path("release") / f"{NAME}-source-{version}.tar.gz"
     dir_structure = [
         root_dir / "bin",
         root_dir / "board",
@@ -603,6 +705,9 @@ def main() -> None:
 
     for dr in dir_structure:
         dr.mkdir(exist_ok=True, parents=True)
+
+    with open(root_dir / "VERSION", "w+") as f:
+        f.write(version + "\n")
 
     copy(Path("LICENSE.md"), root_dir)
     licenses_dir = Path("LICENSES")
@@ -651,19 +756,20 @@ def main() -> None:
             build_elf_component("loader", root_dir, build_dir, board, config, loader_defines)
             build_elf_component("monitor", root_dir, build_dir, board, config, [])
             build_lib_component("libmicrokit", root_dir, build_dir, board, config)
-        # Setup the examples
-        for example, example_path in board.examples.items():
-            include_dir = root_dir / "board" / board.name / "example" / example
-            source_dir = example_path
-            for p in source_dir.rglob("*"):
-                if not p.is_file():
-                    continue
-                rel = p.relative_to(source_dir)
-                dest = include_dir / rel
-                dest.parent.mkdir(exist_ok=True, parents=True)
-                dest.unlink(missing_ok=True)
-                copy(p, dest)
-                dest.chmod(0o744)
+
+    # Setup the examples
+    for example, example_path in EXAMPLES.items():
+        include_dir = root_dir / "example" / example
+        source_dir = example_path
+        for p in source_dir.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(source_dir)
+            dest = include_dir / rel
+            dest.parent.mkdir(exist_ok=True, parents=True)
+            dest.unlink(missing_ok=True)
+            copy(p, dest)
+            dest.chmod(0o744)
 
     if not args.skip_tar:
         # At this point we create a tar.gz file
@@ -674,7 +780,7 @@ def main() -> None:
         process = popen("git ls-files")
         filenames = [Path(fn.strip()) for fn in process.readlines()]
         process.close()
-        source_prefix = Path(f"{NAME}-source-{VERSION}")
+        source_prefix = Path(f"{NAME}-source-{version}")
         with tar_open(source_tar_file, "w:gz") as tar:
             for filename in filenames:
                 tar.add(filename, arcname=source_prefix / filename, filter=tar_filter)

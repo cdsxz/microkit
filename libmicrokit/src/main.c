@@ -21,12 +21,16 @@
 /* All globals are prefixed with microkit_* to avoid clashes with user defined globals. */
 
 bool microkit_passive;
-char microkit_name[16];
+char microkit_name[MICROKIT_PD_NAME_LENGTH];
 /* We use seL4 typedefs as this variable is exposed to the libmicrokit header
  * and we do not want to rely on compiler built-in defines. */
 seL4_Bool microkit_have_signal = seL4_False;
 seL4_CPtr microkit_signal_cap;
 seL4_MessageInfo_t microkit_signal_msg;
+
+seL4_Word microkit_irqs;
+seL4_Word microkit_notifications;
+seL4_Word microkit_pps;
 
 extern seL4_IPCBuffer __sel4_ipc_buffer_obj;
 
@@ -37,11 +41,17 @@ extern const void (*const __init_array_end [])(void);
 
 __attribute__((weak)) microkit_msginfo protected(microkit_channel ch, microkit_msginfo msginfo)
 {
+    microkit_dbg_puts(microkit_name);
+    microkit_dbg_puts(" is missing the 'protected' entry point\n");
+    microkit_internal_crash(0);
     return seL4_MessageInfo_new(0, 0, 0, 0);
 }
 
 __attribute__((weak)) seL4_Bool fault(microkit_child child, microkit_msginfo msginfo, microkit_msginfo *reply_msginfo)
 {
+    microkit_dbg_puts(microkit_name);
+    microkit_dbg_puts(" is missing the 'fault' entry point\n");
+    microkit_internal_crash(0);
     return seL4_False;
 }
 
