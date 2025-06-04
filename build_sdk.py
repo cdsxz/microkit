@@ -99,9 +99,6 @@ SUPPORTED_BOARDS = (
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
         },
-        examples={
-            "hello": Path("example/ls1043a/hello")
-        }
     ),
     BoardInfo(
         name="tqma8xqp1gb",
