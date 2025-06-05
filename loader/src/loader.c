@@ -170,6 +170,8 @@ static void putc(uint8_t ch)
 #define LSR        0x5
 #define LSR_THRE   1 << 5
 
+static void uart_init() {}
+
 static void putc(uint8_t ch)
 {
     while (!(*UART_REG_8(LSR) & LSR_THRE)) { }
