@@ -98,6 +98,7 @@ SUPPORTED_BOARDS = (
             "KernelArmExportPTMRUser": True,
             "KernelArmHypervisorSupport": True,
             "KernelArmVtimerUpdateVOffset": False,
+            "KernelAllowSMCCalls": True,
         },
     ),
     BoardInfo(
